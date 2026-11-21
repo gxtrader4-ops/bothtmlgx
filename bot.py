@@ -3,12 +3,12 @@ import re
 import json
 import base64
 import sqlite3
+import tempfile
 import logging
 from datetime import datetime
 from typing import Optional
 
 import httpx
-from bs4 import BeautifulSoup
 import yt_dlp
 
 from telegram import (
@@ -29,14 +29,14 @@ from telegram.ext import (
 # ==============================================================================
 # CONFIGURATION & BRANDING
 # ==============================================================================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "9265141111:AAFv9t1EdaHekqiH0V2j6n42MTJKeo_lXGU")
+BOT_TOKEN = (os.getenv("9265141111:AAFv9t1EdaHekqiH0V2j6n42MTJKeo_lXGU") or "").strip()
 ADMIN_IDS = {8419760844}
 FORCE_JOIN_CHANNEL = "https://t.me/SUPPOR8TNIROB"
-FORCE_JOIN_USERNAME = "SUPPOR8TNIROB"  # Public username without @ if applicable
+FORCE_JOIN_USERNAME = "SUPPOR8TNIROB"
 OWNER_TAG = "👑 𝗡𝗜𝗥𝗢𝗕 𝗕𝗢𝗦𝗦 𝗚𝗫™ 𝗢𝗪𝗡𝗘𝗥: @NIROB_GX_LEADER"
 BOT_HANDLE = "🤖 Telegram Bot: @nirob_gxteam_Obucsate_bot"
 OBFUSCATOR_REF = "https://www.infyways.com/tools/html-obfuscator/"
-DB_PATH = "bot_data.db"
+DB_PATH = os.path.join(tempfile.gettempdir(), "bot_data.db")
 
 DEFAULT_BUTTONS = {
     "html_enc": "HTML Encrypt",
@@ -54,137 +54,143 @@ logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
-# DATABASE LAYER (SQLITE REAL DATABASE)
+# DATABASE LAYER (SQLITE)
 # ==============================================================================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            is_banned INTEGER DEFAULT 0,
-            joined_at TEXT
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_premium_buttons (
-            user_id INTEGER,
-            button_key TEXT,
-            badge_emoji TEXT,
-            PRIMARY KEY (user_id, button_key)
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                is_banned INTEGER DEFAULT 0,
+                joined_at TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_premium_buttons (
+                user_id INTEGER,
+                button_key TEXT,
+                badge_emoji TEXT,
+                PRIMARY KEY (user_id, button_key)
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def register_user(user_id: int, username: Optional[str], first_name: Optional[str]):
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT OR IGNORE INTO users (user_id, username, first_name, is_banned, joined_at)
-        VALUES (?, ?, ?, 0, ?)
-    """, (user_id, username or "", first_name or "", datetime.utcnow().isoformat()))
-    cur.execute("""
-        UPDATE users SET username = ?, first_name = ? WHERE user_id = ?
-    """, (username or "", first_name or "", user_id))
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT OR IGNORE INTO users (user_id, username, first_name, is_banned, joined_at)
+            VALUES (?, ?, ?, 0, ?)
+        """, (user_id, username or "", first_name or "", datetime.utcnow().isoformat()))
+        cur.execute("""
+            UPDATE users SET username = ?, first_name = ? WHERE user_id = ?
+        """, (username or "", first_name or "", user_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def is_user_banned(user_id: int) -> bool:
     if user_id in ADMIN_IDS:
         return False
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
-    row = cur.fetchone()
-    conn.close()
-    return bool(row and row[0] == 1)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        return bool(row and row[0] == 1)
+    finally:
+        conn.close()
 
 
 def set_user_ban_status(user_id: int, banned: bool):
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT OR IGNORE INTO users (user_id, username, first_name, is_banned, joined_at)
-        VALUES (?, '', '', ?, ?)
-    """, (user_id, 1 if banned else 0, datetime.utcnow().isoformat()))
-    cur.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (1 if banned else 0, user_id))
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT OR IGNORE INTO users (user_id, username, first_name, is_banned, joined_at)
+            VALUES (?, '', '', ?, ?)
+        """, (user_id, 1 if banned else 0, datetime.utcnow().isoformat()))
+        cur.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (1 if banned else 0, user_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
-def get_all_users(limit: int = 30):
+def get_all_users(limit: int = 20):
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT user_id, username, first_name, is_banned FROM users ORDER BY rowid DESC LIMIT ?", (limit,))
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id, username, first_name, is_banned FROM users ORDER BY rowid DESC LIMIT ?", (limit,))
+        return cur.fetchall()
+    finally:
+        conn.close()
 
 
 def get_user_premium_map(user_id: int) -> dict[str, str]:
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT button_key, badge_emoji FROM user_premium_buttons WHERE user_id = ?", (user_id,))
-    rows = cur.fetchall()
-    conn.close()
-    return {k: v for k, v in rows}
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT button_key, badge_emoji FROM user_premium_buttons WHERE user_id = ?", (user_id,))
+        rows = cur.fetchall()
+        return {k: v for k, v in rows}
+    finally:
+        conn.close()
 
 
 def toggle_user_button_premium(user_id: int, button_key: str, emoji: str) -> Optional[str]:
-    """
-    If already premium with the same emoji, remove premium (toggle off).
-    Otherwise set/update premium with the provided emoji.
-    Returns active emoji or None if toggled off.
-    """
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT badge_emoji FROM user_premium_buttons WHERE user_id = ? AND button_key = ?", (user_id, button_key))
-    row = cur.fetchone()
-    if row and row[0] == emoji:
-        cur.execute("DELETE FROM user_premium_buttons WHERE user_id = ? AND button_key = ?", (user_id, button_key))
-        result = None
-    else:
-        cur.execute("""
-            INSERT OR REPLACE INTO user_premium_buttons (user_id, button_key, badge_emoji)
-            VALUES (?, ?, ?)
-        """, (user_id, button_key, emoji))
-        result = emoji
-    conn.commit()
-    conn.close()
-    return result
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT badge_emoji FROM user_premium_buttons WHERE user_id = ? AND button_key = ?",
+            (user_id, button_key),
+        )
+        row = cur.fetchone()
+        if row and row[0] == emoji:
+            cur.execute(
+                "DELETE FROM user_premium_buttons WHERE user_id = ? AND button_key = ?",
+                (user_id, button_key),
+            )
+            result = None
+        else:
+            cur.execute("""
+                INSERT OR REPLACE INTO user_premium_buttons (user_id, button_key, badge_emoji)
+                VALUES (?, ?, ?)
+            """, (user_id, button_key, emoji))
+            result = emoji
+        conn.commit()
+        return result
+    finally:
+        conn.close()
 
 
 # ==============================================================================
 # MULTI-LAYER HTML SECURITY & OBFUSCATION ENGINE
 # ==============================================================================
-def extract_title_and_body(raw_html: str) -> tuple[str, str]:
+def extract_title(raw_html: str) -> str:
     title_match = re.search(r"<title[^>]*>(.*?)</title>", raw_html, flags=re.IGNORECASE | re.DOTALL)
-    title_text = title_match.group(1) if title_match else "Protected Page"
-    return title_text, raw_html
+    return title_match.group(1) if title_match else "Protected Page"
 
 
 def multi_layer_html_encrypt(raw_html: str) -> str:
-    """
-    Combines multi-stage encoding (XOR + Base64 + Hex chunking) + anti-inspect guards
-    while keeping the original <title> tag intact.
-    """
-    title_text, full_html = extract_title_and_body(raw_html)
-    raw_bytes = full_html.encode("utf-8")
+    title_text = extract_title(raw_html)
+    raw_bytes = raw_html.encode("utf-8")
 
-    # Layer 1: Rotating XOR byte transform
     xor_key = [0x5A, 0xA5, 0x3C, 0xC3, 0x7E]
     xored = bytes(b ^ xor_key[i % len(xor_key)] for i, b in enumerate(raw_bytes))
 
-    # Layer 2: Base64 + Reverse + Hex split
     b64_str = base64.b64encode(xored).decode("ascii")[::-1]
     hex_payload = b64_str.encode("utf-8").hex()
 
-    # Chunk into array tokens for runtime reassembly
     chunk_size = 24
     chunks = [hex_payload[i:i + chunk_size] for i in range(0, len(hex_payload), chunk_size)]
     chunks_json = json.dumps(chunks)
@@ -200,7 +206,7 @@ def multi_layer_html_encrypt(raw_html: str) -> str:
         "-->"
     )
 
-    protected_html = f"""{source_warning}
+    return f"""{source_warning}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -214,20 +220,17 @@ def multi_layer_html_encrypt(raw_html: str) -> str:
 <body>
 <script>
 (function(){{
-  const _guard = () => {{
-    document.addEventListener("contextmenu", e => e.preventDefault());
-    document.addEventListener("keydown", e => {{
-      if (
-        e.key === "F12" ||
-        (e.ctrlKey && e.shiftKey && ["I","J","C","K"].includes(e.key.toUpperCase())) ||
-        (e.ctrlKey && ["U","S"].includes(e.key.toUpperCase()))
-      ) {{
-        e.preventDefault();
-        return false;
-      }}
-    }});
-  }};
-  _guard();
+  document.addEventListener("contextmenu", e => e.preventDefault());
+  document.addEventListener("keydown", e => {{
+    if (
+      e.key === "F12" ||
+      (e.ctrlKey && e.shiftKey && ["I","J","C","K"].includes(e.key.toUpperCase())) ||
+      (e.ctrlKey && ["U","S"].includes(e.key.toUpperCase()))
+    ) {{
+      e.preventDefault();
+      return false;
+    }}
+  }});
 
   const _parts = {chunks_json};
   const _k = {key_json};
@@ -240,36 +243,31 @@ def multi_layer_html_encrypt(raw_html: str) -> str:
     return out;
   }}
 
-  function _render() {{
-    try {{
-      const joinedHex = _parts.join("");
-      const revB64 = _decodeHex(joinedHex);
-      const normalB64 = revB64.split("").reverse().join("");
-      const binStr = atob(normalB64);
-      const bytes = new Uint8Array(binStr.length);
-      for (let i = 0; i < binStr.length; i++) {{
-        bytes[i] = binStr.charCodeAt(i) ^ _k[i % _k.length];
-      }}
-      const htmlOut = new TextDecoder("utf-8").decode(bytes);
-      document.open();
-      document.write(htmlOut);
-      document.close();
-    }} catch (err) {{
-      document.body.innerHTML = "<h3 style='font-family:sans-serif;padding:20px;'>Protected Content Error</h3>";
+  try {{
+    const joinedHex = _parts.join("");
+    const revB64 = _decodeHex(joinedHex);
+    const normalB64 = revB64.split("").reverse().join("");
+    const binStr = atob(normalB64);
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) {{
+      bytes[i] = binStr.charCodeAt(i) ^ _k[i % _k.length];
     }}
+    const htmlOut = new TextDecoder("utf-8").decode(bytes);
+    document.open();
+    document.write(htmlOut);
+    document.close();
+  }} catch (err) {{
+    document.body.innerHTML = "<h3 style='font-family:sans-serif;padding:20px;'>Protected Content Error</h3>";
   }}
-
-  _render();
 }})();
 </script>
 </body>
 </html>
 """
-    return protected_html
 
 
 # ==============================================================================
-# KEYBOARDS & FORCE JOIN CHECK
+# FORCE JOIN & KEYBOARDS
 # ==============================================================================
 async def is_joined_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user = update.effective_user
@@ -300,9 +298,7 @@ def build_user_menu(user_id: int) -> InlineKeyboardMarkup:
 
     def label(key: str) -> str:
         base = DEFAULT_BUTTONS[key]
-        if key in prem_map:
-            return f"{prem_map[key]} {base} [PRO]"
-        return base
+        return f"{prem_map[key]} {base} [PRO]" if key in prem_map else base
 
     rows = [
         [
@@ -344,11 +340,11 @@ def admin_button_picker_keyboard() -> InlineKeyboardMarkup:
 
 
 # ==============================================================================
-# COMMANDS & CALLBACK HANDLERS
+# HANDLERS
 # ==============================================================================
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not user:
+    if not user or not update.message:
         return
     register_user(user.id, user.username, user.first_name)
 
@@ -356,8 +352,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 আপনি বট থেকে ব্যান হয়ে আছেন।")
         return
 
-    joined = await is_joined_group(update, context)
-    if not joined:
+    if not await is_joined_group(update, context):
         await update.message.reply_text(
             f"⚠️ বট ব্যবহার করার আগে অবশ্যই নিচের গ্রুপ/চ্যানেলে জয়েন করতে হবে:\n{FORCE_JOIN_CHANNEL}\n\n"
             "জয়েন করার পর নিচের **Joined — Verify Again** বাটনে চাপ দিন।",
@@ -368,14 +363,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["mode"] = None
     await update.message.reply_text(
-        f"{OWNER_TAG}\n{BOT_HANDLE}\n\n"
-        "একটি অপশন সিলেক্ট করুন:",
+        f"{OWNER_TAG}\n{BOT_HANDLE}\n\nএকটি অপশন সিলেক্ট করুন:",
         reply_markup=build_user_menu(user.id),
     )
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query or not query.from_user:
+        return
     user = query.from_user
     await query.answer()
 
@@ -383,7 +379,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🚫 আপনি ব্যান হয়ে আছেন।")
         return
 
-    data = query.data
+    data = query.data or ""
 
     if data == "check_join":
         if await is_joined_group(update, context):
@@ -417,8 +413,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "html_enc"
         await query.edit_message_text(
             "🔐 **HTML Encrypt মোড চালু হয়েছে**\n\n"
-            "এখন আপনার `.html` ফাইল পাঠান অথবা HTML কোড মেসেজে পেস্ট করুন। "
-            "মূল `<title>` ঠিক রেখে কোডটি মাল্টি-লেয়ার সিকিউরিটিতে এনক্রিপ্ট করে দেওয়া হবে।",
+            "আপনার `.html` ফাইল পাঠান অথবা HTML কোড মেসেজে পেস্ট করুন।",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -427,7 +422,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "link_to_html"
         await query.edit_message_text(
             "🌐 **Link to HTML মোড চালু হয়েছে**\n\n"
-            "একটি ওয়েবসাইট লিংক পাঠান। লিংক থেকে প্রাপ্ত মূল HTML কোড কোনো এডিট ছাড়াই ফাইল আকারে পাঠানো হবে।",
+            "একটি ওয়েবসাইট লিংক পাঠান। লিংক থেকে মূল HTML কোড ফাইল আকারে দেওয়া হবে।",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -445,7 +440,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "pic_to_link"
         await query.edit_message_text(
             "🖼 **Pic to Link মোড চালু হয়েছে**\n\n"
-            "একটি ছবি (Photo) পাঠান, সেটির ডাইরেক্ট লিংক তৈরি করে দেওয়া হবে।",
+            "একটি ছবি (Photo) পাঠান, সেটির লিংক তৈরি করে দেওয়া হবে।",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -454,13 +449,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"👨‍💻 **Developer Info**\n\n{OWNER_TAG}\n{BOT_HANDLE}\n"
             f"📢 Support: {FORCE_JOIN_CHANNEL}\n"
-            f"🔧 Obfuscator Ref: {OBFUSCATOR_REF}",
+            f"🔧 Ref: {OBFUSCATOR_REF}",
             reply_markup=build_user_menu(user.id),
             parse_mode=ParseMode.MARKDOWN,
         )
         return
 
-    # ---------------- ADMIN ACTIONS ----------------
     if user.id not in ADMIN_IDS:
         await query.edit_message_text("⛔ শুধুমাত্র অ্যাডমিন এই অপশন ব্যবহার করতে পারেন।")
         return
@@ -468,7 +462,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin_panel":
         context.user_data["mode"] = None
         await query.edit_message_text(
-            "⚙️ **Admin Control Panel**\n\nঅপশন নির্বাচন করুন:",
+            "⚙️ **Admin Control Panel**",
             reply_markup=admin_panel_keyboard(),
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -476,18 +470,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "adm_unban":
         context.user_data["mode"] = "adm_unban_wait_id"
-        await query.edit_message_text(
-            "🔓 যে ইউজারকে আনব্যান করতে চান, তার **User ID** পাঠান (যেমন: `123456789`)।",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await query.edit_message_text("🔓 আনব্যান করার জন্য **User ID** পাঠান।", parse_mode=ParseMode.MARKDOWN)
         return
 
     if data == "adm_ban":
         context.user_data["mode"] = "adm_ban_wait_id"
-        await query.edit_message_text(
-            "🚫 যে ইউজারকে ব্যান করতে চান, তার **User ID** পাঠান।",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await query.edit_message_text("🚫 ব্যান করার জন্য **User ID** পাঠান।", parse_mode=ParseMode.MARKDOWN)
         return
 
     if data == "adm_prem_select_btn":
@@ -503,8 +491,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["target_btn_key"] = btn_key
         await query.edit_message_text(
             f"💎 সিলেক্টেড বাটন: **{DEFAULT_BUTTONS.get(btn_key, btn_key)}**\n\n"
-            "এখন নিচের ফরম্যাটে `User_ID` এবং `Emoji` পাঠান (একই ইমোজি দিলে অফ হবে):\n"
-            "`123456789 👑`",
+            "এখন `User_ID Emoji` পাঠান (যেমন: `123456789 👑`)",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -523,9 +510,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-# ==============================================================================
-# MESSAGE & FILE HANDLERS
-# ==============================================================================
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or not update.message or not update.message.text:
@@ -546,7 +530,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = update.message.text.strip()
     mode = context.user_data.get("mode")
 
-    # Admin Unban flow
     if mode == "adm_unban_wait_id" and user.id in ADMIN_IDS:
         try:
             target_id = int(text)
@@ -554,10 +537,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data["mode"] = None
             await update.message.reply_text(f"✅ User `{target_id}` আনব্যান করা হয়েছে।", parse_mode=ParseMode.MARKDOWN)
         except ValueError:
-            await update.message.reply_text("❌ সঠিক সংখ্যাসূচক User ID পাঠান।")
+            await update.message.reply_text("❌ সঠিক User ID পাঠান।")
         return
 
-    # Admin Ban flow
     if mode == "adm_ban_wait_id" and user.id in ADMIN_IDS:
         try:
             target_id = int(text)
@@ -565,10 +547,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data["mode"] = None
             await update.message.reply_text(f"🚫 User `{target_id}` ব্যান করা হয়েছে।", parse_mode=ParseMode.MARKDOWN)
         except ValueError:
-            await update.message.reply_text("❌ সঠিক সংখ্যাসূচক User ID পাঠান।")
+            await update.message.reply_text("❌ সঠিক User ID পাঠান।")
         return
 
-    # Admin Set/Toggle Premium Button flow
     if mode == "adm_prem_wait_user_emoji" and user.id in ADMIN_IDS:
         parts = text.split()
         if len(parts) < 2:
@@ -595,20 +576,19 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         return
 
-    # User HTML Encrypt via pasted HTML code
     if mode == "html_enc":
         protected = multi_layer_html_encrypt(text)
-        out_path = f"/tmp/protected_{user.id}.html"
+        out_path = os.path.join(tempfile.gettempdir(), f"protected_{user.id}.html")
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(protected)
-        await update.message.reply_document(
-            document=open(out_path, "rb"),
-            filename="protected_index.html",
-            caption=f"🔐 হাই-সিকিউরিটি HTML এনক্রিপ্ট সম্পন্ন!\n{OWNER_TAG}",
-        )
+        with open(out_path, "rb") as doc_file:
+            await update.message.reply_document(
+                document=doc_file,
+                filename="protected_index.html",
+                caption=f"🔐 হাই-সিকিউরিটি HTML এনক্রিপ্ট সম্পন্ন!\n{OWNER_TAG}",
+            )
         return
 
-    # User Link to HTML (raw untouched HTML)
     if mode == "link_to_html":
         if not text.startswith(("http://", "https://")):
             await update.message.reply_text("❌ সঠিক `http://` বা `https://` লিংক পাঠান।", parse_mode=ParseMode.MARKDOWN)
@@ -619,25 +599,25 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 resp = await client.get(text)
                 resp.raise_for_status()
                 raw_html = resp.text
-            out_path = f"/tmp/fetched_{user.id}.html"
+            out_path = os.path.join(tempfile.gettempdir(), f"fetched_{user.id}.html")
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(raw_html)
-            await update.message.reply_document(
-                document=open(out_path, "rb"),
-                filename="source_page.html",
-                caption="✅ লিংকের মূল HTML কোড (কোনো পরিবর্তন ছাড়া)।",
-            )
+            with open(out_path, "rb") as doc_file:
+                await update.message.reply_document(
+                    document=doc_file,
+                    filename="source_page.html",
+                    caption="✅ লিংকের মূল HTML কোড (কোনো পরিবর্তন ছাড়া)।",
+                )
         except Exception as e:
             await update.message.reply_text(f"❌ HTML আনা যায়নি: {e}")
         return
 
-    # User Link to Video
     if mode == "link_to_video":
         if not text.startswith(("http://", "https://")):
             await update.message.reply_text("❌ সঠিক ভিডিও লিংক পাঠান।")
             return
         await update.message.reply_text("⏳ ভিডিও ডাউনলোড হচ্ছে, অনুগ্রহ করে অপেক্ষা করুন...")
-        out_tmpl = f"/tmp/vid_{user.id}_%(id)s.%(ext)s"
+        out_tmpl = os.path.join(tempfile.gettempdir(), f"vid_{user.id}_%(id)s.%(ext)s")
         ydl_opts = {
             "outtmpl": out_tmpl,
             "format": "best[ext=mp4]/best",
@@ -651,10 +631,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 downloaded_file = ydl.prepare_filename(info)
 
             if downloaded_file and os.path.exists(downloaded_file):
-                await update.message.reply_video(
-                    video=open(downloaded_file, "rb"),
-                    caption=f"🎬 ভিডিও ডাউনলোড সম্পন্ন!\n{OWNER_TAG}",
-                )
+                with open(downloaded_file, "rb") as vid_file:
+                    await update.message.reply_video(
+                        video=vid_file,
+                        caption=f"🎬 ভিডিও ডাউনলোড সম্পন্ন!\n{OWNER_TAG}",
+                    )
             else:
                 await update.message.reply_text("❌ ভিডিও ফাইল পাওয়া যায়নি।")
         except Exception as e:
@@ -690,15 +671,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_html = raw_bytes.decode("utf-8", errors="ignore")
 
     protected = multi_layer_html_encrypt(raw_html)
-    out_path = f"/tmp/enc_{user.id}_{doc.file_name or 'index.html'}"
+    safe_name = os.path.basename(doc.file_name or "index.html")
+    out_path = os.path.join(tempfile.gettempdir(), f"enc_{user.id}_{safe_name}")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(protected)
 
-    await update.message.reply_document(
-        document=open(out_path, "rb"),
-        filename=f"protected_{doc.file_name or 'index.html'}",
-        caption=f"🔐 ফাইল হাই-সিকিউরিটিতে এনক্রিপ্ট হয়েছে!\n{OWNER_TAG}",
-    )
+    with open(out_path, "rb") as out_doc:
+        await update.message.reply_document(
+            document=out_doc,
+            filename=f"protected_{safe_name}",
+            caption=f"🔐 ফাইল হাই-সিকিউরিটিতে এনক্রিপ্ট হয়েছে!\n{OWNER_TAG}",
+        )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -722,8 +705,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    if not BOT_TOKEN or BOT_TOKEN == "PUT_YOUR_BOT_TOKEN_HERE":
-        raise RuntimeError("BOT_TOKEN সেট করা হয়নি! হোস্ট করার সময় BOT_TOKEN বসিয়ে দিন।")
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN environment variable is missing! Set BOT_TOKEN in Render Environment.")
 
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
@@ -734,7 +717,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-    logger.info("Bot started...")
+    logger.info("Bot polling started...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
