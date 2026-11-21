@@ -5,7 +5,7 @@ import base64
 import sqlite3
 import tempfile
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -29,7 +29,12 @@ from telegram.ext import (
 # ==============================================================================
 # CONFIGURATION & BRANDING
 # ==============================================================================
-BOT_TOKEN = (os.getenv("9265141111:AAFv9t1EdaHekqiH0V2j6n42MTJKeo_lXGU") or "").strip()
+# হোস্টিংয়ের Environment Variable-এ BOT_TOKEN থাকলে সেটি নেবে, না থাকলে নিচের স্ট্রিং নেবে
+BOT_TOKEN = (
+    os.getenv("BOT_TOKEN")
+    or "9265141111:AAFv9t1EdaHekqiH0V2j6n42MTJKeo_lXGU"
+).strip()
+
 ADMIN_IDS = {8419760844}
 FORCE_JOIN_CHANNEL = "https://t.me/SUPPOR8TNIROB"
 FORCE_JOIN_USERNAME = "SUPPOR8TNIROB"
@@ -86,10 +91,11 @@ def register_user(user_id: int, username: Optional[str], first_name: Optional[st
     conn = sqlite3.connect(DB_PATH)
     try:
         cur = conn.cursor()
+        now_iso = datetime.now(timezone.utc).isoformat()
         cur.execute("""
             INSERT OR IGNORE INTO users (user_id, username, first_name, is_banned, joined_at)
             VALUES (?, ?, ?, 0, ?)
-        """, (user_id, username or "", first_name or "", datetime.utcnow().isoformat()))
+        """, (user_id, username or "", first_name or "", now_iso))
         cur.execute("""
             UPDATE users SET username = ?, first_name = ? WHERE user_id = ?
         """, (username or "", first_name or "", user_id))
@@ -115,10 +121,11 @@ def set_user_ban_status(user_id: int, banned: bool):
     conn = sqlite3.connect(DB_PATH)
     try:
         cur = conn.cursor()
+        now_iso = datetime.now(timezone.utc).isoformat()
         cur.execute("""
             INSERT OR IGNORE INTO users (user_id, username, first_name, is_banned, joined_at)
             VALUES (?, '', '', ?, ?)
-        """, (user_id, 1 if banned else 0, datetime.utcnow().isoformat()))
+        """, (user_id, 1 if banned else 0, now_iso))
         cur.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (1 if banned else 0, user_id))
         conn.commit()
     finally:
@@ -282,7 +289,8 @@ async def is_joined_group(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             ChatMemberStatus.ADMINISTRATOR,
             ChatMemberStatus.OWNER,
         }
-    except Exception:
+    except Exception as exc:
+        logger.warning("Force join check failed: %s", exc)
         return False
 
 
@@ -349,13 +357,13 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     register_user(user.id, user.username, user.first_name)
 
     if is_user_banned(user.id):
-        await update.message.reply_text("🚫 আপনি বট থেকে ব্যান হয়ে আছেন।")
+        await update.message.reply_text("🚫 আপনি বট থেকে ব্যান হয়ে আছেন।")
         return
 
     if not await is_joined_group(update, context):
         await update.message.reply_text(
-            f"⚠️ বট ব্যবহার করার আগে অবশ্যই নিচের গ্রুপ/চ্যানেলে জয়েন করতে হবে:\n{FORCE_JOIN_CHANNEL}\n\n"
-            "জয়েন করার পর নিচের **Joined — Verify Again** বাটনে চাপ দিন।",
+            f"⚠️ বট ব্যবহার করার আগে অবশ্যই নিচের গ্রুপ/চ্যানেলে জয়েন করতে হবে:\n{FORCE_JOIN_CHANNEL}\n\n"
+            "জয়েন করার পর নিচের **Joined — Verify Again** বাটনে চাপ দিন।",
             reply_markup=force_join_keyboard(),
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -376,7 +384,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if is_user_banned(user.id):
-        await query.edit_message_text("🚫 আপনি ব্যান হয়ে আছেন।")
+        await query.edit_message_text("🚫 আপনি ব্যান হয়ে আছেন।")
         return
 
     data = query.data or ""
@@ -384,19 +392,19 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "check_join":
         if await is_joined_group(update, context):
             await query.edit_message_text(
-                f"✅ জয়েন ভেরিফাইড!\n\n{OWNER_TAG}\n{BOT_HANDLE}\n\nএকটি অপশন সিলেক্ট করুন:",
+                f"✅ জয়েন ভেরিফাইড!\n\n{OWNER_TAG}\n{BOT_HANDLE}\n\nএকটি অপশন সিলেক্ট করুন:",
                 reply_markup=build_user_menu(user.id),
             )
         else:
             await query.edit_message_text(
-                f"❌ এখনো জয়েন পাওয়া যায়নি। আগে জয়েন করুন:\n{FORCE_JOIN_CHANNEL}",
+                f"❌ এখনো জয়েন পাওয়া যায়নি। আগে জয়েন করুন:\n{FORCE_JOIN_CHANNEL}",
                 reply_markup=force_join_keyboard(),
             )
         return
 
     if not await is_joined_group(update, context):
         await query.edit_message_text(
-            f"⚠️ আগে গ্রুপ/চ্যানেলে জয়েন করুন:\n{FORCE_JOIN_CHANNEL}",
+            f"⚠️ আগে গ্রুপ/চ্যানেলে জয়েন করুন:\n{FORCE_JOIN_CHANNEL}",
             reply_markup=force_join_keyboard(),
         )
         return
@@ -412,8 +420,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "mode_html_enc":
         context.user_data["mode"] = "html_enc"
         await query.edit_message_text(
-            "🔐 **HTML Encrypt মোড চালু হয়েছে**\n\n"
-            "আপনার `.html` ফাইল পাঠান অথবা HTML কোড মেসেজে পেস্ট করুন।",
+            "🔐 **HTML Encrypt মোড চালু হয়েছে**\n\n"
+            "আপনার .html ফাইল পাঠান অথবা HTML কোড মেসেজে পেস্ট করুন।",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -421,8 +429,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "mode_link_to_html":
         context.user_data["mode"] = "link_to_html"
         await query.edit_message_text(
-            "🌐 **Link to HTML মোড চালু হয়েছে**\n\n"
-            "একটি ওয়েবসাইট লিংক পাঠান। লিংক থেকে মূল HTML কোড ফাইল আকারে দেওয়া হবে।",
+            "🌐 **Link to HTML মোড চালু হয়েছে**\n\n"
+            "একটি ওয়েবসাইট লিংক পাঠান। লিংক থেকে মূল HTML কোড ফাইল আকারে দেওয়া হবে।",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -430,7 +438,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "mode_link_to_video":
         context.user_data["mode"] = "link_to_video"
         await query.edit_message_text(
-            "🎬 **Link to Video মোড চালু হয়েছে**\n\n"
+            "🎬 **Link to Video মোড চালু হয়েছে**\n\n"
             "ভিডিও লিংক পাঠান। সাপোর্টেড প্ল্যাটফর্ম থেকে ভিডিও ডাউনলোড করে পাঠানো হবে।",
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -439,19 +447,18 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "mode_pic_to_link":
         context.user_data["mode"] = "pic_to_link"
         await query.edit_message_text(
-            "🖼 **Pic to Link মোড চালু হয়েছে**\n\n"
-            "একটি ছবি (Photo) পাঠান, সেটির লিংক তৈরি করে দেওয়া হবে।",
+            "🖼 **Pic to Link মোড চালু হয়েছে**\n\n"
+            "একটি ছবি (Photo) পাঠান, সেটির লিংক তৈরি করে দেওয়া হবে।",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
 
     if data == "mode_developer":
         await query.edit_message_text(
-            f"👨‍💻 **Developer Info**\n\n{OWNER_TAG}\n{BOT_HANDLE}\n"
+            f"👨‍💻 Developer Info\n\n{OWNER_TAG}\n{BOT_HANDLE}\n"
             f"📢 Support: {FORCE_JOIN_CHANNEL}\n"
             f"🔧 Ref: {OBFUSCATOR_REF}",
             reply_markup=build_user_menu(user.id),
-            parse_mode=ParseMode.MARKDOWN,
         )
         return
 
@@ -480,7 +487,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "adm_prem_select_btn":
         await query.edit_message_text(
-            "💎 কোন বাটনটি প্রিমিয়াম করতে/ইমোজি বদলাতে চান তা সিলেক্ট করুন:",
+            "💎 কোন বাটনটি প্রিমিয়াম করতে/ইমোজি বদলাতে চান তা সিলেক্ট করুন:",
             reply_markup=admin_button_picker_keyboard(),
         )
         return
@@ -490,22 +497,21 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "adm_prem_wait_user_emoji"
         context.user_data["target_btn_key"] = btn_key
         await query.edit_message_text(
-            f"💎 সিলেক্টেড বাটন: **{DEFAULT_BUTTONS.get(btn_key, btn_key)}**\n\n"
-            "এখন `User_ID Emoji` পাঠান (যেমন: `123456789 👑`)",
-            parse_mode=ParseMode.MARKDOWN,
+            f"💎 সিলেক্টেড বাটন: {DEFAULT_BUTTONS.get(btn_key, btn_key)}\n\n"
+            "এখন User_ID এবং Emoji পাঠান (যেমন: 123456789 👑)",
         )
         return
 
     if data == "adm_db_stats":
         users = get_all_users(limit=20)
-        lines = [f"🗄 **Real Database Users (Latest {len(users)}):**\n"]
+        lines = [f"🗄 Real Database Users (Latest {len(users)}):\n"]
         for uid, uname, fname, banned in users:
             st = "BANNED" if banned else "ACTIVE"
-            lines.append(f"• `{uid}` | @{uname or 'none'} | {fname or ''} | **{st}**")
+            uname_clean = (uname or "none").replace("_", "\\_")
+            lines.append(f"• {uid} | @{uname_clean} | {fname or ''} | {st}")
         await query.edit_message_text(
             "\n".join(lines),
             reply_markup=admin_panel_keyboard(),
-            parse_mode=ParseMode.MARKDOWN,
         )
         return
 
@@ -517,12 +523,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     register_user(user.id, user.username, user.first_name)
 
     if is_user_banned(user.id):
-        await update.message.reply_text("🚫 আপনি ব্যান হয়ে আছেন।")
+        await update.message.reply_text("🚫 আপনি ব্যান হয়ে আছেন।")
         return
 
     if not await is_joined_group(update, context):
         await update.message.reply_text(
-            f"⚠️ আগে জয়েন করুন:\n{FORCE_JOIN_CHANNEL}",
+            f"⚠️ আগে জয়েন করুন:\n{FORCE_JOIN_CHANNEL}",
             reply_markup=force_join_keyboard(),
         )
         return
@@ -535,7 +541,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             target_id = int(text)
             set_user_ban_status(target_id, False)
             context.user_data["mode"] = None
-            await update.message.reply_text(f"✅ User `{target_id}` আনব্যান করা হয়েছে।", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(f"✅ User {target_id} আনব্যান করা হয়েছে।")
         except ValueError:
             await update.message.reply_text("❌ সঠিক User ID পাঠান।")
         return
@@ -545,7 +551,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             target_id = int(text)
             set_user_ban_status(target_id, True)
             context.user_data["mode"] = None
-            await update.message.reply_text(f"🚫 User `{target_id}` ব্যান করা হয়েছে।", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(f"🚫 User {target_id} ব্যান করা হয়েছে।")
         except ValueError:
             await update.message.reply_text("❌ সঠিক User ID পাঠান।")
         return
@@ -553,7 +559,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if mode == "adm_prem_wait_user_emoji" and user.id in ADMIN_IDS:
         parts = text.split()
         if len(parts) < 2:
-            await update.message.reply_text("❌ ফরম্যাট: `123456789 👑`", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text("❌ ফরম্যাট: 123456789 👑")
             return
         try:
             target_uid = int(parts[0])
@@ -566,13 +572,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["mode"] = None
         if active_emoji:
             await update.message.reply_text(
-                f"✅ User `{target_uid}`-এর **{DEFAULT_BUTTONS.get(btn_key)}** বাটনে {active_emoji} প্রিমিয়াম যুক্ত হয়েছে।",
-                parse_mode=ParseMode.MARKDOWN,
+                f"✅ User {target_uid}-এর {DEFAULT_BUTTONS.get(btn_key)} বাটনে {active_emoji} প্রিমিয়াম যুক্ত হয়েছে।"
             )
         else:
             await update.message.reply_text(
-                f"🔄 User `{target_uid}`-এর **{DEFAULT_BUTTONS.get(btn_key)}** বাটনের প্রিমিয়াম ইমোজি রিমুভ করা হয়েছে।",
-                parse_mode=ParseMode.MARKDOWN,
+                f"🔄 User {target_uid}-এর {DEFAULT_BUTTONS.get(btn_key)} বাটনের প্রিমিয়াম ইমোজি রিমুভ করা হয়েছে।"
             )
         return
 
@@ -591,7 +595,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if mode == "link_to_html":
         if not text.startswith(("http://", "https://")):
-            await update.message.reply_text("❌ সঠিক `http://` বা `https://` লিংক পাঠান।", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text("❌ সঠিক http:// বা https:// লিংক পাঠান।")
             return
         await update.message.reply_text("⏳ লিংক থেকে মূল HTML সংগ্রহ করা হচ্ছে...")
         try:
@@ -606,10 +610,10 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.message.reply_document(
                     document=doc_file,
                     filename="source_page.html",
-                    caption="✅ লিংকের মূল HTML কোড (কোনো পরিবর্তন ছাড়া)।",
+                    caption="✅ লিংকের মূল HTML কোড (কোনো পরিবর্তন ছাড়া)।",
                 )
         except Exception as e:
-            await update.message.reply_text(f"❌ HTML আনা যায়নি: {e}")
+            await update.message.reply_text(f"❌ HTML আনা যায়নি: {e}")
         return
 
     if mode == "link_to_video":
@@ -637,7 +641,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         caption=f"🎬 ভিডিও ডাউনলোড সম্পন্ন!\n{OWNER_TAG}",
                     )
             else:
-                await update.message.reply_text("❌ ভিডিও ফাইল পাওয়া যায়নি।")
+                await update.message.reply_text("❌ ভিডিও ফাইল পাওয়া যায়নি।")
         except Exception as e:
             await update.message.reply_text(f"❌ ভিডিও ডাউনলোড ব্যর্থ: {e}")
         finally:
@@ -662,7 +666,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if context.user_data.get("mode") != "html_enc":
-        await update.message.reply_text("ℹ️ HTML ফাইল এনক্রিপ্ট করতে আগে **HTML Encrypt** বাটনে চাপ দিন।", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("ℹ️ HTML ফাইল এনক্রিপ্ট করতে আগে HTML Encrypt বাটনে চাপ দিন।")
         return
 
     doc = update.message.document
@@ -680,7 +684,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(
             document=out_doc,
             filename=f"protected_{safe_name}",
-            caption=f"🔐 ফাইল হাই-সিকিউরিটিতে এনক্রিপ্ট হয়েছে!\n{OWNER_TAG}",
+            caption=f"🔐 ফাইল হাই-সিকিউরিটিতে এনক্রিপ্ট হয়েছে!\n{OWNER_TAG}",
         )
 
 
@@ -692,21 +696,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if context.user_data.get("mode") != "pic_to_link":
-        await update.message.reply_text("ℹ️ ছবি থেকে লিংক বানাতে আগে **Pic to Link** বাটনে চাপ দিন।", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("ℹ️ ছবি থেকে লিংক বানাতে আগে Pic to Link বাটনে চাপ দিন।")
         return
 
     photo = update.message.photo[-1]
     tg_file = await photo.get_file()
     file_url = tg_file.file_path
     await update.message.reply_text(
-        f"🖼 **Pic to Link প্রস্তুত:**\n`{file_url}`",
-        parse_mode=ParseMode.MARKDOWN,
+        f"🖼 Pic to Link প্রস্তুত:\n{file_url}"
     )
 
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN environment variable is missing! Set BOT_TOKEN in Render Environment.")
+        raise RuntimeError("BOT_TOKEN is missing!")
 
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
